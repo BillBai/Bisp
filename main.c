@@ -256,6 +256,7 @@ lval* lval_eval_sexpr(lval* v)
 
     if (v->count == 0) { return v; }
 
+    if (v->count == 1) { return lval_take(v, 0); }
     lval* f = lval_pop(v, 0);
     if (f->type != LVAL_SYM) {
         lval_del(f);
