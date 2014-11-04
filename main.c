@@ -661,15 +661,14 @@ lval* lval_call(lenv* e, lval* f, lval* a)
             lval_del(a);
             return lval_err("Function passed too many arguments. \
                     Got %i, Expected %i.", given, total);
+       }
+        lval* sym = lval_pop(f->formals, 0);
+        lval* val = lval_pop(a, 0);
 
-            lval* sym = lval_pop(f->formals, 0);
-            lval* val = lval_pop(a, 0);
+        lenv_put(f->env, sym, val);
 
-            lenv_put(f->env, sym, val);
-
-            lval_del(sym);
-            lval_del(val);
-        }
+        lval_del(sym);
+        lval_del(val);
     }
 
     lval_del(a);
@@ -702,6 +701,7 @@ void lenv_add_builtins(lenv* e)
 
     lenv_add_builtin(e, "def", builtin_def);
     lenv_add_builtin(e, "=", builtin_put);
+    lenv_add_builtin(e, "\\", builtin_lambda);
 
     /* Mathematical Functions */
     lenv_add_builtin(e, "+", builtin_add);
@@ -727,9 +727,12 @@ lval* lval_eval_sexpr(lenv* e, lval* v)
 
     lval* f = lval_pop(v, 0);
     if (f->type != LVAL_FUN) {
-        lval_del(v);
-        lval_del(f);
-        return lval_err("S-expression Does not start with symbol!");
+        lval* err = lval_err(
+                "S-Expression starts with incorrect type. "
+                "Got %s, Expected %s.",
+                ltype_name(f->type), ltype_name(LVAL_FUN));
+        lval_del(f); lval_del(v);
+        return err;
     }
 
     lval* result = lval_call(e, f, v);
