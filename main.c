@@ -50,6 +50,16 @@ void add_history(char *input) {}
   LASSERT(args, args->cell[index]->count != 0, \
     "Function '%s' passed {} for argument %i.", func, index);
 
+mpc_parser_t* Number;
+mpc_parser_t* Symbol;
+mpc_parser_t* String;
+mpc_parser_t* Sexpr;
+mpc_parser_t* Qexpr;
+mpc_parser_t* Expr;
+mpc_parser_t* Comment;
+mpc_parser_t* Bisp;
+
+
 struct lval;
 struct lenv;
 typedef struct lval lval;
@@ -412,6 +422,7 @@ lval* lval_read(mpc_ast_t* t)
         if (strcmp(t->children[i]->contents, "{") == 0) { continue; }
         if (strcmp(t->children[i]->contents, "}") == 0) { continue; }
         if (strcmp(t->children[i]->tag, "regex") == 0) { continue; }
+        if (strstr(t->children[i]->tag, "comment") == 0) { continue; }
         x = lval_add(x, lval_read(t->children[i]));
     }
 
@@ -864,6 +875,57 @@ void lenv_add_builtin(lenv* e, char* name, lbuiltin func)
     lval_del(v);
 }
 
+lval* builtin_load(lenv* e, lval* a)
+{
+    LASSERT_NUM("load", a, 1);
+    LASSERT_TYPE("load", a, 0, LVAL_STR);
+
+    mpc_result_t r;
+    if (mpc_parse_contents(a->cell[0]->str, Bisp, &r)) {
+        lval* expr = lval_read(r.output);
+        mpc_ast_delete(r.output);
+
+        while(expr->count) {
+            lval* x = lval_eval(e, lval_pop(expr, 0));
+            if (x->type == LVAL_ERR) { lval_println(x); }
+            lval_del(x);
+        }
+
+        lval_del(expr);
+        lval_del(a);
+
+        return lval_sexpr();
+    } else {
+        char* err_msg = mpc_err_string(r.error);
+        lval* err = lval_err(err_msg);
+        lval_del(a);
+        return err;
+    }
+}
+
+lval* builtin_print(lenv* e, lval* a)
+{
+    for (int i = 0; i < a->count; i++) {
+        lval_print(a->cell[i]);
+        putchar(' ');
+    }
+
+    putchar('\n');
+    lval_del(a);
+    return lval_sexpr();
+}
+
+lval* builtin_error(lenv* e, lval* a)
+{
+    LASSERT_NUM("error", a, 1);
+    LASSERT_TYPE("errpr", a, 0, LVAL_STR);
+
+    lval* err = lval_err(a->cell[0]->str);
+
+    lval_del(a);
+    return err;
+}
+
 void lenv_add_builtins(lenv* e)
 {
     /* List Functions */
@@ -890,6 +952,10 @@ void lenv_add_builtins(lenv* e)
     lenv_add_builtin(e, "<", builtin_lt);
     lenv_add_builtin(e, ">=", builtin_ge);
     lenv_add_builtin(e, "<=", builtin_le);
+
+    lenv_add_builtin(e, "load", builtin_load);
+    lenv_add_builtin(e, "error", builtin_error);
+    lenv_add_builtin(e, "print", builtin_print);
 }
 
 lval* lval_eval_sexpr(lenv* e, lval* v)
@@ -936,13 +1002,14 @@ lval* lval_eval(lenv* e, lval* v)
 int main(int argc, char** argv)
 {
     /* Create parsers */
-    mpc_parser_t* Number = mpc_new("number");
-    mpc_parser_t* Symbol = mpc_new("symbol");
-    mpc_parser_t* String = mpc_new("string");
-    mpc_parser_t* Sexpr = mpc_new("sexpr");
-    mpc_parser_t* Qexpr = mpc_new("qexpr");
-    mpc_parser_t* Expr = mpc_new("expr");
-    mpc_parser_t* Bisp = mpc_new("bisp");
+    Number = mpc_new("number");
+    Symbol = mpc_new("symbol");
+    String = mpc_new("string");
+    Sexpr = mpc_new("sexpr");
+    Qexpr = mpc_new("qexpr");
+    Expr = mpc_new("expr");
+    Comment = mpc_new("comment");
+    Bisp = mpc_new("bisp");
 
     mpca_lang(MPCA_LANG_DEFAULT,
             "                                                   \
@@ -951,39 +1018,52 @@ int main(int argc, char** argv)
             string : /\"(\\\\.|[^\"])*\"/ ;                     \
             sexpr  : '(' <expr>* ')';                           \
             qexpr  : '{' <expr>* '}';                           \
-            expr   : <string> | <number> | <qexpr> | <sexpr> | <symbol> ;  \
+            expr   : <string> | <number> | <qexpr> | <sexpr>    \
+                     | <symbol> | <comment> ;                   \
+            comment : /;[^\\r\\n]*/ ;                           \
             bisp   : /^/ <expr>* /$/ ;                          \
             ",
-            Number, Symbol, String, Sexpr, Qexpr, Expr, Bisp);
-
-
-
-    puts("Bisp version 0.0.0.2");
-    puts("Press ctrl-c to exit\n");
+            Number, Symbol, String, Sexpr, Qexpr, Expr, Comment, Bisp);
 
     lenv* e = lenv_new();
     lenv_add_builtins(e);
 
-    while (1) {
-        char *input = readline("Bisp :> ");
-        add_history(input);
+    if (argc == 1) {
+        puts("Bisp version 0.0.0.2");
+        puts("Press ctrl-c to exit\n");
 
-        mpc_result_t r;
-        if (mpc_parse("<stdin>", input, Bisp, &r)) {
-            lval* result = lval_eval(e, lval_read(r.output));
-            lval_println(result);
-            lval_del(result);
-        } else {
-            mpc_err_print(r.error);
-            mpc_err_delete(r.error);
+
+        while (1) {
+            char *input = readline("Bisp :> ");
+            add_history(input);
+
+            mpc_result_t r;
+            if (mpc_parse("<stdin>", input, Bisp, &r)) {
+                lval* result = lval_eval(e, lval_read(r.output));
+                lval_println(result);
+                lval_del(result);
+            } else {
+                mpc_err_print(r.error);
+                mpc_err_delete(r.error);
+            }
+
+            free(input);
         }
-
-        free(input);
     }
 
-    lenv_del(e);
+    if (argc == 2) {
+        for (int i = 1; i < argc; i++) {
+            lval* args = lval_add(lval_sexpr(), lval_str(argv[i]));
 
-    mpc_cleanup(6, Number, Symbol, String, Sexpr, Qexpr, Expr, Bisp);
+            lval* x = builtin_load(e, args);
+
+            if (x->type == LVAL_ERR) { lval_println(x); }
+            lval_del(x);
+        }
+    }
+       lenv_del(e);
+
+    mpc_cleanup(8, Number, Symbol, String, Sexpr, Qexpr, Expr, Comment, Bisp);
 
     return 0;
 }
