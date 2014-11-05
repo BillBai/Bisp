@@ -56,7 +56,7 @@ typedef struct lval lval;
 typedef struct lenv lenv;
 
 
-enum { LVAL_FUN, LVAL_NUM, LVAL_ERR, LVAL_SYM, LVAL_SEXPR, LVAL_QEXPR };
+enum { LVAL_FUN, LVAL_NUM, LVAL_ERR, LVAL_SYM, LVAL_STR, LVAL_SEXPR, LVAL_QEXPR };
 
 typedef lval* (*lbuiltin) (lenv* , lval*);
 
@@ -66,6 +66,7 @@ struct lval {
     long num;
     char* err;
     char* sym;
+    char* str;
 
     // if lbuiltin is not NULL, then it is a builtin func, otherwise it is a lambda
     lbuiltin builtin;
@@ -84,6 +85,7 @@ char* ltype_name(int t)
         case LVAL_NUM: return "Number";
         case LVAL_ERR: return "Error";
         case LVAL_SYM: return "Symbol";
+        case LVAL_STR: return "String";
         case LVAL_SEXPR: return "S-Expression";
         case LVAL_QEXPR: return "Q-Expression";
         default: return "Unknown";
@@ -121,6 +123,15 @@ lval* lval_symbol(char* s)
     v->type = LVAL_SYM;
     v->sym = (char*)malloc(strlen(s) + 1);
     strcpy(v->sym, s);
+    return v;
+}
+
+lval* lval_str(char* str)
+{
+    lval* v = (lval*)malloc(sizeof(lval));
+    v->type = LVAL_STR;
+    v->str = (char*)malloc(strlen(str) + 1);
+    strcpy(v->str, str);
     return v;
 }
 
@@ -186,6 +197,9 @@ void lval_del(lval* v)
             break;
         case LVAL_ERR:
             free(v->err);
+            break;
+        case LVAL_STR:
+            free(v->str);
             break;
         case LVAL_QEXPR:
         case LVAL_SEXPR:
@@ -255,6 +269,10 @@ lval* lval_copy(lval* v)
         case LVAL_SYM:
             x->sym = (char*)malloc(strlen(v->sym) + 1);
             strcpy(x->sym, v->sym);
+            break;
+        case LVAL_STR:
+            x->str = (char*)malloc(strlen(v->str) + 1);
+            strcmp(x->str, v->str);
             break;
         case LVAL_QEXPR:
         case LVAL_SEXPR:
@@ -361,10 +379,26 @@ lval* lval_read_num(mpc_ast_t* t)
     return errno != ERANGE ? lval_num(x) : lval_err("Invalid number");
 }
 
+lval* lval_read_str(mpc_ast_t* t)
+{
+    t->contents[strlen(t->contents) - 1] = '\0';
+
+    char* unescaped = (char*)malloc(strlen(t->contents+1) + 1);
+    strcpy(unescaped, t->contents+1);
+
+    unescaped = (char*)mpcf_unescape(unescaped);
+
+    lval* str = lval_str(unescaped);
+
+    free(unescaped);
+    return str;
+}
+
 lval* lval_read(mpc_ast_t* t)
 {
     if (strstr(t->tag, "number")) { return lval_read_num(t); }
     if (strstr(t->tag, "symbol")) { return lval_symbol(t->contents); }
+    if (strstr(t->tag, "string")) { return lval_read_str(t); }
 
     // if root (>) or sexpr, cearte an empty lval_sexpr.
     lval *x = NULL;
@@ -399,6 +433,18 @@ void lval_expr_print(lval* v, char open, char close)
     putchar(close);
 }
 
+void lval_print_str(lval* v)
+{
+    char* escape = (char*)malloc(strlen(v->str) + 1);
+    strcpy(escape, v->str);
+
+    escape = (char*)mpcf_escape(escape);
+
+    printf("\"%s\"", escape);
+
+    free(escape);
+}
+
 void lval_print(lval* v)
 {
     switch (v->type) {
@@ -410,6 +456,9 @@ void lval_print(lval* v)
             break;
         case LVAL_SYM:
             printf("%s", v->sym);
+            break;
+        case LVAL_STR:
+            lval_print_str(v);
             break;
         case LVAL_SEXPR:
             lval_expr_print(v, '(', ')');
@@ -706,6 +755,9 @@ int lval_eq(lval* x, lval* y)
         case LVAL_SYM:
             return (strcmp(x->sym, y->sym) == 0);
             break;
+        case LVAL_STR:
+            return (strcmp(x->str, y->str) == 0);
+            break;
         case LVAL_FUN:
             if (x->builtin || y->builtin) {
                 return (x->builtin == y->builtin);
@@ -886,6 +938,7 @@ int main(int argc, char** argv)
     /* Create parsers */
     mpc_parser_t* Number = mpc_new("number");
     mpc_parser_t* Symbol = mpc_new("symbol");
+    mpc_parser_t* String = mpc_new("string");
     mpc_parser_t* Sexpr = mpc_new("sexpr");
     mpc_parser_t* Qexpr = mpc_new("qexpr");
     mpc_parser_t* Expr = mpc_new("expr");
@@ -894,13 +947,14 @@ int main(int argc, char** argv)
     mpca_lang(MPCA_LANG_DEFAULT,
             "                                                   \
             number : /-?[0-9]+/ ;                               \
-            symbol : /[a-zA-Z0-9_+\\-*\\/\\\\=<>!&]+/ ;       \
+            symbol : /[a-zA-Z0-9_+\\-*\\/\\\\=<>!&]+/ ;         \
+            string : /\"(\\\\.|[^\"])*\"/ ;                     \
             sexpr  : '(' <expr>* ')';                           \
             qexpr  : '{' <expr>* '}';                           \
-            expr   : <number> | <qexpr> | <sexpr> | <symbol> ;  \
+            expr   : <string> | <number> | <qexpr> | <sexpr> | <symbol> ;  \
             bisp   : /^/ <expr>* /$/ ;                          \
             ",
-            Number, Symbol, Sexpr, Qexpr, Expr, Bisp);
+            Number, Symbol, String, Sexpr, Qexpr, Expr, Bisp);
 
 
 
@@ -929,7 +983,7 @@ int main(int argc, char** argv)
 
     lenv_del(e);
 
-    mpc_cleanup(5, Number, Symbol, Sexpr, Qexpr, Expr, Bisp);
+    mpc_cleanup(6, Number, Symbol, String, Sexpr, Qexpr, Expr, Bisp);
 
     return 0;
 }
